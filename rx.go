@@ -31,6 +31,7 @@ func garbage_collector(updated chan struct{}, addr string) {
             case <-delete_client:
                 fmt.Printf("Client with ip %s not responding --> deleting\n", addr)
                 delete(clients, addr)
+                return
 
             case <-updated:
         }
@@ -75,6 +76,8 @@ func main() {
 
             go garbage_collector(client.updated, fmt.Sprint(addr))
 
+            conn.WriteTo([]byte{ 0 }, addr)
+
             continue
         }
 
@@ -85,14 +88,17 @@ func main() {
         case 1:
             client.chunksNum = binary.LittleEndian.Uint64(buf[:bytesRead])
             client.state++
+            conn.WriteTo([]byte{ 0 }, addr)
 
         case 2:
             copy(client.checksum, buf[:bytesRead])
             client.state++
+            conn.WriteTo([]byte{ 0 }, addr)
 
         case 3:
             client.lastChunkId = binary.LittleEndian.Uint64(buf[:bytesRead])
             client.state++
+            conn.WriteTo([]byte{ 0 }, addr)
 
         case 4:
             fmt.Printf("Received chunk %d of %d\n", client.lastChunkId + 1, client.chunksNum)
@@ -121,6 +127,8 @@ func main() {
                 }
 
                 delete(clients, fmt.Sprint(addr))
+            } else {
+                conn.WriteTo([]byte{ 0 }, addr)
             }
         }
     }

@@ -5,7 +5,6 @@ import (
     "log"
     "net"
     "os"
-    "time"
     "path/filepath"
     "encoding/binary"
     "crypto/sha256"
@@ -45,18 +44,22 @@ func main() {
     chunksNum := (len(bytes) + CHUNK_SIZE - 1) / CHUNK_SIZE
 
     conn.WriteTo([]byte(filename), remoteAddr)
+    conn.ReadFrom([]byte{})
 
     buf := make([]byte, 8)
     binary.LittleEndian.PutUint64(buf, uint64(chunksNum))
     conn.WriteTo(buf, remoteAddr)
+    conn.ReadFrom([]byte{})
 
     checksum := sha256.Sum256(bytes)
     conn.WriteTo(checksum[:], remoteAddr)
+    conn.ReadFrom([]byte{})
     
     for i := 0; i < chunksNum; i++ {
         buf = make([]byte, 8)
         binary.LittleEndian.PutUint64(buf, uint64(i))
         conn.WriteTo(buf, remoteAddr)
+        conn.ReadFrom([]byte{})
 
         startIdx := i * CHUNK_SIZE
 
@@ -64,9 +67,8 @@ func main() {
             conn.WriteTo(bytes[startIdx:], remoteAddr)
         } else {
             conn.WriteTo(bytes[startIdx:startIdx+CHUNK_SIZE], remoteAddr)
+            conn.ReadFrom([]byte{})
         }
-
-        time.Sleep(time.Second / 10)
     }
 
     buf = make([]byte, 65000)
