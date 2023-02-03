@@ -60,7 +60,6 @@ func main() {
     checksum := sha256.Sum256(bytes)
     conn.WriteTo(append([]byte{ byte(id) }, checksum[:]...), remoteAddr)
     conn.ReadFrom([]byte{})
-    fmt.Println(checksum)
     
     for i := 0; i < chunksNum; i++ {
         buf = make([]byte, 8)
@@ -71,12 +70,10 @@ func main() {
         startIdx := i * CHUNK_SIZE
 
         if len(bytes[startIdx:]) < CHUNK_SIZE {
-            bytesWritten, _ := conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:]...), remoteAddr)
-            fmt.Println(bytesWritten)
+            conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:]...), remoteAddr)
         } else {
-            bytesWritten, _ := conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:startIdx+CHUNK_SIZE]...), remoteAddr)
+            conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:startIdx+CHUNK_SIZE]...), remoteAddr)
             conn.ReadFrom([]byte{})
-            fmt.Println(bytesWritten)
         }
     }
 

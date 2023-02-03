@@ -53,7 +53,7 @@ func main() {
 
     clients = make(map[int]*Client)
 
-    buf := make([]byte, CHUNK_SIZE)
+    buf := make([]byte, CHUNK_SIZE + 1)
 
     for {
         bytesRead, addr, err := conn.ReadFrom(buf)
@@ -81,10 +81,9 @@ func main() {
 
             continue
         }
-        fmt.Println(bytesRead)
 
         id := int(buf[0])
-        buf = buf[1:]
+        buf2 := buf[1:]
         bytesRead--
 
         client := clients[id]
@@ -94,41 +93,35 @@ func main() {
         switch client.state {
 
         case 1:
-            client.filename = string(buf[:bytesRead])
-            fmt.Println(client.filename)
+            client.filename = string(buf2[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 2:
-            client.chunksNum = binary.LittleEndian.Uint64(buf[:bytesRead])
-            fmt.Println(client.chunksNum)
+            client.chunksNum = binary.LittleEndian.Uint64(buf2[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 3:
-            copy(client.checksum, buf[:bytesRead])
-            fmt.Println(client.checksum)
+            copy(client.checksum, buf2[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 4:
-            client.lastChunkId = binary.LittleEndian.Uint64(buf[:bytesRead])
-            fmt.Println(client.lastChunkId)
+            client.lastChunkId = binary.LittleEndian.Uint64(buf2[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 5:
             fmt.Printf("Received chunk %d of %d\n", client.lastChunkId + 1, client.chunksNum)
 
-            client.bytes = append(client.bytes, buf[:bytesRead]...)
+            client.bytes = append(client.bytes, buf2[:bytesRead]...)
 
             client.receivedChunksNum++
             client.state--
 
             if client.receivedChunksNum == client.chunksNum {
                 fmt.Printf("Received file from client %d\n", id)
-                fmt.Println(client.checksum)
-                fmt.Println(sha256.Sum256(client.bytes))
 
                 if sha256.Sum256(client.bytes) == *(*[32]byte)(client.checksum) {
                     if _, err := os.Stat(client.filename); err == nil {
@@ -151,7 +144,5 @@ func main() {
                 conn.WriteTo([]byte{ 0 }, addr)
             }
         }
-
-        fmt.Println("======================")
     }
 }
