@@ -23,14 +23,14 @@ type Client struct {
     bytes []byte
 }
 
-func garbage_collector(updated chan struct{}, addr string) {
+func garbage_collector(updated chan struct{}, id int) {
     for {
         delete_client := time.After(time.Second * 5)
 
         select {
             case <-delete_client:
-                fmt.Printf("Client with ip %s not responding --> deleting\n", addr)
-                delete(clients, addr)
+                fmt.Printf("Client %d not responding --> deleting\n", id)
+                delete(clients, id)
                 return
 
             case <-updated:
@@ -38,9 +38,11 @@ func garbage_collector(updated chan struct{}, addr string) {
     }
 }
 
-var clients map[string]*Client
+var clients map[int]*Client
 
 func main() {
+    fmt.Println("Server is running on port 4242")
+
     conn, err := net.ListenPacket("udp", "0.0.0.0:4242")
 
     if err != nil {
@@ -49,7 +51,7 @@ func main() {
 
     defer conn.Close()
 
-    clients = make(map[string]*Client)
+    clients = make(map[int]*Client)
 
     buf := make([]byte, CHUNK_SIZE)
 
@@ -60,55 +62,69 @@ func main() {
             log.Panic(err)
         }
 
-        client, contains := clients[fmt.Sprint(addr)]
+        if bytesRead == 0 {
+            id := len(clients)
 
-        if !contains {
-            fmt.Printf("New client with ip %s connected\n", addr)
+            fmt.Printf("Client %d with ip %s connected\n", id, addr)
 
             client := Client{}
 
-            client.filename = string(buf[:bytesRead])
             client.checksum = make([]byte, 32)
             client.updated = make(chan struct{}, 2)
             client.state++
 
-            clients[fmt.Sprint(addr)] = &client
+            clients[id] = &client
 
-            go garbage_collector(client.updated, fmt.Sprint(addr))
+            go garbage_collector(client.updated, id)
 
-            conn.WriteTo([]byte{ 0 }, addr)
+            conn.WriteTo([]byte{ byte(id) }, addr)
 
             continue
         }
+        fmt.Println(bytesRead)
+
+        id := int(buf[0])
+        buf = buf[1:]
+        bytesRead--
+
+        client := clients[id]
 
         client.updated <- struct{}{}
         
         switch client.state {
 
         case 1:
-            client.chunksNum = binary.LittleEndian.Uint64(buf[:bytesRead])
+            client.filename = string(buf[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 2:
-            copy(client.checksum, buf[:bytesRead])
+            client.chunksNum = binary.LittleEndian.Uint64(buf[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 3:
-            client.lastChunkId = binary.LittleEndian.Uint64(buf[:bytesRead])
+            copy(client.checksum, buf[:bytesRead])
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 4:
+            client.lastChunkId = binary.LittleEndian.Uint64(buf[:bytesRead])
+            client.state++
+            conn.WriteTo([]byte{ 0 }, addr)
+
+        case 5:
             fmt.Printf("Received chunk %d of %d\n", client.lastChunkId + 1, client.chunksNum)
+
             client.bytes = append(client.bytes, buf[:bytesRead]...)
 
             client.receivedChunksNum++
             client.state--
 
             if client.receivedChunksNum == client.chunksNum {
-                fmt.Printf("Received file from client with ip %s\n", addr)
+                fmt.Printf("Received file from client %d\n", id)
+                fmt.Println(client.checksum)
+                fmt.Println(sha256.Sum256(client.bytes))
 
                 if sha256.Sum256(client.bytes) == *(*[32]byte)(client.checksum) {
                     if _, err := os.Stat(client.filename); err == nil {
@@ -126,7 +142,7 @@ func main() {
                     conn.WriteTo([]byte(fmt.Sprintf("ERROR: File not transmitted, checksums are not equal")), addr)
                 }
 
-                delete(clients, fmt.Sprint(addr))
+                delete(clients, id)
             } else {
                 conn.WriteTo([]byte{ 0 }, addr)
             }
