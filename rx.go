@@ -95,21 +95,25 @@ func main() {
 
         case 1:
             client.filename = string(buf[:bytesRead])
+            fmt.Println(client.filename)
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 2:
             client.chunksNum = binary.LittleEndian.Uint64(buf[:bytesRead])
+            fmt.Println(client.chunksNum)
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 3:
             copy(client.checksum, buf[:bytesRead])
+            fmt.Println(client.checksum)
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
         case 4:
             client.lastChunkId = binary.LittleEndian.Uint64(buf[:bytesRead])
+            fmt.Println(client.lastChunkId)
             client.state++
             conn.WriteTo([]byte{ 0 }, addr)
 
@@ -147,5 +151,7 @@ func main() {
                 conn.WriteTo([]byte{ 0 }, addr)
             }
         }
+
+        fmt.Println("======================")
     }
 }
