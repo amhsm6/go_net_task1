@@ -8,6 +8,7 @@ import (
     "time"
     "encoding/binary"
     "crypto/sha256"
+    "path"
 )
 
 const CHUNK_SIZE = 60000
@@ -28,12 +29,17 @@ func garbage_collector(updated chan struct{}, id int) {
         delete_client := time.After(time.Second * 5)
 
         select {
-            case <-delete_client:
+
+        case <-delete_client:
+            if _, contains := clients[id]; contains {
                 fmt.Printf("Client %d not responding --> deleting\n", id)
                 delete(clients, id)
-                return
+            }
 
-            case <-updated:
+            return
+
+        case <-updated:
+
         }
     }
 }
@@ -41,6 +47,8 @@ func garbage_collector(updated chan struct{}, id int) {
 var clients map[int]*Client
 
 func main() {
+    os.Mkdir("files", os.ModePerm)
+
     fmt.Println("Server is running on port 4242")
 
     conn, err := net.ListenPacket("udp", "0.0.0.0:4242")
@@ -124,11 +132,36 @@ func main() {
                 fmt.Printf("Received file from client %d\n", id)
 
                 if sha256.Sum256(client.bytes) == *(*[32]byte)(client.checksum) {
-                    if _, err := os.Stat(client.filename); err == nil {
-                        client.filename += "_copy"
+                    ext := path.Ext(client.filename)
+                    base := client.filename[:len(client.filename) - len(ext)]
+
+                    files, err := os.ReadDir("files")
+
+                    if err != nil {
+                        log.Panic(err)
                     }
 
-                    err := os.WriteFile(client.filename, client.bytes, 0644)
+                    max_copy_num := -1
+
+                    for _, file := range files {
+                        n := -1
+
+                        if client.filename == file.Name() {
+                            n = 0
+                        } else {
+                            fmt.Sscanf(file.Name(), base + " (%d)" + ext, &n) 
+                        }
+
+                        if n > max_copy_num {
+                            max_copy_num = n
+                        }
+                    }
+
+                    if max_copy_num > -1 {
+                        client.filename = fmt.Sprintf("%v (%v)%v", base, max_copy_num + 1, ext)
+                    }
+
+                    err = os.WriteFile(path.Join("files", client.filename), client.bytes, 0644)
 
                     if err != nil {
                         conn.WriteTo([]byte(fmt.Sprintf("ERROR: %v", err.Error())), addr)
