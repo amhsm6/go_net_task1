@@ -11,31 +11,41 @@ import (
     "path"
 )
 
-const CHUNK_SIZE = 60000
+type Stack []int
+
+func (s *Stack) Push(v int) {
+    *s = append(*s, v)
+}
+
+func (s *Stack) Pop() (res int) {
+    res = (*s)[len(*s) - 1]
+    *s = (*s)[:len(*s) - 1]
+    return
+}
 
 type Client struct {
     updated chan struct{}
-    state int
+    finished chan struct{}
     filename string
-    chunksNum uint64
+    chunksNum uint32
     checksum []byte
-    lastChunkId uint64
-    receivedChunksNum uint64
+    receivedChunksNum uint32
     bytes []byte
 }
 
-func garbage_collector(updated chan struct{}, id int) {
+func garbage_collector(updated chan struct{}, finished chan struct{}, id int) {
     for {
         delete_client := time.After(time.Second * 5)
 
         select {
 
         case <-delete_client:
-            if _, contains := clients[id]; contains {
-                fmt.Printf("Client %d not responding --> deleting\n", id)
-                delete(clients, id)
-            }
+            fmt.Printf("Client %d not responding --> deleting\n", id)
+            delete(clients, id)
+            idStack.Push(id)
+            return
 
+        case <-finished:
             return
 
         case <-updated:
@@ -45,6 +55,7 @@ func garbage_collector(updated chan struct{}, id int) {
 }
 
 var clients map[int]*Client
+var idStack Stack
 
 func main() {
     os.Mkdir("files", os.ModePerm)
@@ -60,8 +71,11 @@ func main() {
     defer conn.Close()
 
     clients = make(map[int]*Client)
+    for id := 254; id >= 0; id-- {
+        idStack.Push(id)
+    }
 
-    buf := make([]byte, CHUNK_SIZE + 1)
+    buf := make([]byte, 65000)
 
     for {
         bytesRead, addr, err := conn.ReadFrom(buf)
@@ -70,112 +84,97 @@ func main() {
             log.Panic(err)
         }
 
-        if bytesRead == 0 {
-            id := len(clients)
-
-            fmt.Printf("Client %d with ip %s connected\n", id, addr)
-
+        if buf[0] == 0xff {
             client := Client{}
-
             client.checksum = make([]byte, 32)
-            client.updated = make(chan struct{}, 2)
-            client.state++
+            client.updated = make(chan struct{}, 1)
+            client.finished = make(chan struct{}, 1)
 
+            client.chunksNum = binary.LittleEndian.Uint32(buf[1:5])
+            copy(client.checksum, buf[5:37])
+            client.filename = string(buf[37:bytesRead])
+
+            id := idStack.Pop()
             clients[id] = &client
 
-            go garbage_collector(client.updated, id)
+            go garbage_collector(client.updated, client.finished, id)
 
             conn.WriteTo([]byte{ byte(id) }, addr)
+
+            fmt.Printf(
+                "Client %d with ip %s connected\n\tFILE %v would be received in %v CHUNKS\n",
+                id,
+                addr,
+                client.filename,
+                client.chunksNum,
+            )
 
             continue
         }
 
-        id := int(buf[0])
-        buf2 := buf[1:]
-        bytesRead--
+        buf_copy := make([]byte, bytesRead)
+        copy(buf_copy, buf)
 
+        id := int(buf_copy[0])
         client := clients[id]
-
         client.updated <- struct{}{}
+
+        chunkId := binary.LittleEndian.Uint32(buf_copy[1:5])
         
-        switch client.state {
+        fmt.Printf("Received chunk %d of %d from client %d\n", chunkId + 1, client.chunksNum, id)
 
-        case 1:
-            client.filename = string(buf2[:bytesRead])
-            client.state++
-            conn.WriteTo([]byte{ 0 }, addr)
+        client.bytes = append(client.bytes, buf_copy[5:bytesRead]...)
+        client.receivedChunksNum++
 
-        case 2:
-            client.chunksNum = binary.LittleEndian.Uint64(buf2[:bytesRead])
-            client.state++
-            conn.WriteTo([]byte{ 0 }, addr)
+        if client.receivedChunksNum == client.chunksNum {
+            fmt.Printf("Received file from client %d\n", id)
 
-        case 3:
-            copy(client.checksum, buf2[:bytesRead])
-            client.state++
-            conn.WriteTo([]byte{ 0 }, addr)
+            if sha256.Sum256(client.bytes) == *(*[32]byte)(client.checksum) {
+                ext := path.Ext(client.filename)
+                base := client.filename[:len(client.filename) - len(ext)]
 
-        case 4:
-            client.lastChunkId = binary.LittleEndian.Uint64(buf2[:bytesRead])
-            client.state++
-            conn.WriteTo([]byte{ 0 }, addr)
+                files, err := os.ReadDir("files")
 
-        case 5:
-            fmt.Printf("Received chunk %d of %d\n", client.lastChunkId + 1, client.chunksNum)
-
-            client.bytes = append(client.bytes, buf2[:bytesRead]...)
-
-            client.receivedChunksNum++
-            client.state--
-
-            if client.receivedChunksNum == client.chunksNum {
-                fmt.Printf("Received file from client %d\n", id)
-
-                if sha256.Sum256(client.bytes) == *(*[32]byte)(client.checksum) {
-                    ext := path.Ext(client.filename)
-                    base := client.filename[:len(client.filename) - len(ext)]
-
-                    files, err := os.ReadDir("files")
-
-                    if err != nil {
-                        log.Panic(err)
-                    }
-
-                    max_copy_num := -1
-
-                    for _, file := range files {
-                        n := -1
-
-                        if client.filename == file.Name() {
-                            n = 0
-                        } else {
-                            fmt.Sscanf(file.Name(), base + " (%d)" + ext, &n) 
-                        }
-
-                        if n > max_copy_num {
-                            max_copy_num = n
-                        }
-                    }
-
-                    if max_copy_num > -1 {
-                        client.filename = fmt.Sprintf("%v (%v)%v", base, max_copy_num + 1, ext)
-                    }
-
-                    err = os.WriteFile(path.Join("files", client.filename), client.bytes, 0644)
-
-                    if err != nil {
-                        conn.WriteTo([]byte(fmt.Sprintf("ERROR: %v", err.Error())), addr)
-                    } else {
-                        conn.WriteTo([]byte(fmt.Sprintf("File %s successfully transmitted", client.filename)), addr)
-                    }
-                } else {
-                    conn.WriteTo([]byte(fmt.Sprintf("ERROR: File not transmitted, checksums are not equal")), addr)
+                if err != nil {
+                    log.Panic(err)
                 }
 
-                delete(clients, id)
+                max_copy_num := -1
+
+                for _, file := range files {
+                    n := -1
+
+                    if client.filename == file.Name() {
+                        n = 0
+                    } else {
+                        fmt.Sscanf(file.Name(), base + " (%d)" + ext, &n) 
+                    }
+
+                    if n > max_copy_num {
+                        max_copy_num = n
+                    }
+                }
+
+                if max_copy_num > -1 {
+                    client.filename = fmt.Sprintf("%v (%v)%v", base, max_copy_num + 1, ext)
+                }
+
+                err = os.WriteFile(path.Join("files", client.filename), client.bytes, 0644)
+
+                if err != nil {
+                    conn.WriteTo([]byte(fmt.Sprintf("ERROR: %v", err.Error())), addr)
+                } else {
+                    conn.WriteTo([]byte(fmt.Sprintf("File %s successfully transmitted", client.filename)), addr)
+                }
             } else {
-                conn.WriteTo([]byte{ 0 }, addr)
+                conn.WriteTo([]byte(fmt.Sprintf("ERROR: File not transmitted, checksums are not equal")), addr)
             }
+
+            client.finished <- struct{}{}
+            delete(clients, id)
+            idStack.Push(id)
+        } else {
+            conn.WriteTo([]byte{ 0 }, addr)
         }
     }
 }

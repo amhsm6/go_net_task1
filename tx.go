@@ -42,37 +42,28 @@ func main() {
     }
 
     chunksNum := (len(bytes) + CHUNK_SIZE - 1) / CHUNK_SIZE
-
-    conn.WriteTo([]byte{}, remoteAddr)
-
-    buf := make([]byte, 8)
-    conn.ReadFrom(buf)
-    id := binary.LittleEndian.Uint64(buf)
-
-    conn.WriteTo(append([]byte{ byte(id) }, []byte(filename)...), remoteAddr)
-    conn.ReadFrom([]byte{})
-
-    buf = make([]byte, 8)
-    binary.LittleEndian.PutUint64(buf, uint64(chunksNum))
-    conn.WriteTo(append([]byte{ byte(id) }, buf...), remoteAddr)
-    conn.ReadFrom([]byte{})
-
     checksum := sha256.Sum256(bytes)
-    conn.WriteTo(append([]byte{ byte(id) }, checksum[:]...), remoteAddr)
-    conn.ReadFrom([]byte{})
-    
+
+    buf := []byte{ 0xff, 0x00, 0x00, 0x00, 0x00 }
+    binary.LittleEndian.PutUint32(buf[1:], uint32(chunksNum))
+    buf = append(buf, checksum[:]...)
+    buf = append(buf, []byte(filename)...)
+    conn.WriteTo(buf, remoteAddr)
+
+    buf = make([]byte, 4)
+    conn.ReadFrom(buf)
+    id := binary.LittleEndian.Uint32(buf)
+
     for i := 0; i < chunksNum; i++ {
-        buf = make([]byte, 8)
-        binary.LittleEndian.PutUint64(buf, uint64(i))
-        conn.WriteTo(append([]byte{ byte(id) }, buf...), remoteAddr)
-        conn.ReadFrom([]byte{})
+        buf = []byte{ byte(id), 0x00, 0x00, 0x00, 0x00 }
+        binary.LittleEndian.PutUint32(buf[1:], uint32(i))
 
         startIdx := i * CHUNK_SIZE
 
         if len(bytes[startIdx:]) < CHUNK_SIZE {
-            conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:]...), remoteAddr)
+            conn.WriteTo(append(buf, bytes[startIdx:]...), remoteAddr)
         } else {
-            conn.WriteTo(append([]byte{ byte(id) }, bytes[startIdx:startIdx+CHUNK_SIZE]...), remoteAddr)
+            conn.WriteTo(append(buf, bytes[startIdx:startIdx+CHUNK_SIZE]...), remoteAddr)
             conn.ReadFrom([]byte{})
         }
     }
