@@ -104,8 +104,9 @@ func process(conn *net.PacketConn, addr net.Addr, buf []byte) {
         return
     }
 
-    id := int(buf[0])
     clients.mutex.Lock()
+
+    id := int(buf[0])
     client := clients.inner[id]
     client.updated <- struct{}{}
 
@@ -199,18 +200,15 @@ func main() {
         idStack.inner.Push(id)
     }
 
-    buf := make([]byte, 65000)
-
     for {
+        buf := make([]byte, 65000)
+
         bytesRead, addr, err := conn.ReadFrom(buf)
 
         if err != nil {
             log.Panic(err)
         }
 
-        buf_copy := make([]byte, bytesRead)
-        copy(buf_copy, buf)
-
-        go process(&conn, addr, buf_copy)
+        go process(&conn, addr, buf[:bytesRead])
     }
 }

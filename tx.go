@@ -8,9 +8,10 @@ import (
     "path/filepath"
     "encoding/binary"
     "crypto/sha256"
+    "time"
 )
 
-const CHUNK_SIZE = 60000
+const CHUNK_SIZE = 50000
 
 func main() {
     if len(os.Args) < 3 {
@@ -66,6 +67,8 @@ func main() {
             conn.WriteTo(append(buf, bytes[startIdx:startIdx+CHUNK_SIZE]...), remoteAddr)
             conn.ReadFrom([]byte{})
         }
+
+        time.Sleep(time.Millisecond * 500)
     }
 
     buf = make([]byte, 65000)
